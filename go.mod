@@ -1,4 +1,4 @@
-module gopkg.in/a-random-lemurian/lumberjack.v2
+module github.com/a-random-lemurian/lumberjack
 
 go 1.22
 
