@@ -3,7 +3,7 @@
 // Note that this is v2.0 of lumberjack, and should be imported using gopkg.in
 // thusly:
 //
-//   import "gopkg.in/natefinch/lumberjack.v2"
+//	import "gopkg.in/natefinch/lumberjack.v2"
 //
 // The package name remains simply lumberjack, and the code resides at
 // https://github.com/natefinch/lumberjack under the v2.0 branch.
@@ -37,7 +37,6 @@ import (
 
 const (
 	backupTimeFormat = "2006-01-02T15-04-05.000"
-	compressSuffix   = ".gz"
 	defaultMaxSize   = 100
 )
 
@@ -66,7 +65,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -103,9 +102,13 @@ type Logger struct {
 	// time.
 	LocalTime bool `json:"localtime" yaml:"localtime"`
 
-	// Compress determines if the rotated log files should be compressed
-	// using gzip. The default is not to perform compression.
+	// Compress determines if the rotated log files should be compressed,
+	// The default is not to perform compression.
 	Compress bool `json:"compress" yaml:"compress"`
+
+	// Compressor is a provider for compression, if Compress is true.
+	// The library currently has Gzip and Zstd compression built in.
+	Compressor Compressor
 
 	size int64
 	file *os.File
@@ -113,6 +116,70 @@ type Logger struct {
 
 	millCh    chan bool
 	startMill sync.Once
+}
+
+type Compressor interface {
+	Compress(src, dst string) error
+	GetFileExtension() string
+}
+
+type GzipCompressor struct{}
+
+func (c *GzipCompressor) GetFileExtension() string {
+	return ".gz"
+}
+
+func (c *GzipCompressor) Compress(src, dst string) (err error) {
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %v", err)
+	}
+	defer f.Close()
+
+	fi, err := osStat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat log file: %v", err)
+	}
+
+	if err := chown(dst, fi); err != nil {
+		return fmt.Errorf("failed to chown compressed log file: %v", err)
+	}
+
+	// If this file already exists, we presume it was created by
+	// a previous attempt to compress the log file.
+	gzf, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fi.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to open compressed log file: %v", err)
+	}
+	defer gzf.Close()
+
+	gz := gzip.NewWriter(gzf)
+
+	defer func() {
+		if err != nil {
+			os.Remove(dst)
+			err = fmt.Errorf("failed to compress log file: %v", err)
+		}
+	}()
+
+	if _, err := io.Copy(gz, f); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+	if err := gzf.Close(); err != nil {
+		return err
+	}
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 var (
@@ -127,6 +194,16 @@ var (
 	// to disk.
 	megabyte = 1024 * 1024
 )
+
+var defaultCompressor = &GzipCompressor{}
+
+// Get a compressor. If no default compressor is set, return a GzipCompressor.
+func (l *Logger) getCompressor() Compressor {
+	if l.Compressor != nil {
+		return l.Compressor
+	}
+	return defaultCompressor
+}
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
 // than MaxSize, the file is closed, renamed to include a timestamp of the
@@ -312,6 +389,7 @@ func (l *Logger) millRunOnce() error {
 	}
 
 	var compress, remove []logInfo
+	compressSuffix := l.getCompressor().GetFileExtension()
 
 	if l.MaxBackups > 0 && l.MaxBackups < len(files) {
 		preserved := make(map[string]bool)
@@ -364,7 +442,7 @@ func (l *Logger) millRunOnce() error {
 	}
 	for _, f := range compress {
 		fn := filepath.Join(l.dir(), f.Name())
-		errCompress := compressLogFile(fn, fn+compressSuffix)
+		errCompress := l.getCompressor().Compress(fn, fn+compressSuffix)
 		if err == nil && errCompress != nil {
 			err = errCompress
 		}
@@ -414,7 +492,7 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
+		if t, err := l.timeFromName(f.Name(), prefix, ext+l.getCompressor().GetFileExtension()); err == nil {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
@@ -461,61 +539,6 @@ func (l *Logger) prefixAndExt() (prefix, ext string) {
 	ext = filepath.Ext(filename)
 	prefix = filename[:len(filename)-len(ext)] + "-"
 	return prefix, ext
-}
-
-// compressLogFile compresses the given log file, removing the
-// uncompressed log file if successful.
-func compressLogFile(src, dst string) (err error) {
-	f, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("failed to open log file: %v", err)
-	}
-	defer f.Close()
-
-	fi, err := osStat(src)
-	if err != nil {
-		return fmt.Errorf("failed to stat log file: %v", err)
-	}
-
-	if err := chown(dst, fi); err != nil {
-		return fmt.Errorf("failed to chown compressed log file: %v", err)
-	}
-
-	// If this file already exists, we presume it was created by
-	// a previous attempt to compress the log file.
-	gzf, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fi.Mode())
-	if err != nil {
-		return fmt.Errorf("failed to open compressed log file: %v", err)
-	}
-	defer gzf.Close()
-
-	gz := gzip.NewWriter(gzf)
-
-	defer func() {
-		if err != nil {
-			os.Remove(dst)
-			err = fmt.Errorf("failed to compress log file: %v", err)
-		}
-	}()
-
-	if _, err := io.Copy(gz, f); err != nil {
-		return err
-	}
-	if err := gz.Close(); err != nil {
-		return err
-	}
-	if err := gzf.Close(); err != nil {
-		return err
-	}
-
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Remove(src); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // logInfo is a convenience struct to return the filename and its embedded

@@ -205,6 +205,7 @@ func TestMaxBackups(t *testing.T) {
 		MaxSize:    10,
 		MaxBackups: 1,
 	}
+	compressSuffix := l.getCompressor().GetFileExtension()
 	defer l.Close()
 	b := []byte("boo!")
 	n, err := l.Write(b)
@@ -338,7 +339,7 @@ func TestCleanupExistingBackups(t *testing.T) {
 	newFakeTime()
 
 	backup = backupFile(dir)
-	err = ioutil.WriteFile(backup+compressSuffix, data, 0644)
+	err = ioutil.WriteFile(backup+".gz", data, 0644)
 	isNil(err, t)
 
 	newFakeTime()
@@ -600,6 +601,7 @@ func TestCompressOnRotate(t *testing.T) {
 		Filename: filename,
 		MaxSize:  10,
 	}
+	compressSuffix := l.getCompressor().GetFileExtension()
 	defer l.Close()
 	b := []byte("boo!")
 	n, err := l.Write(b)
@@ -649,6 +651,7 @@ func TestCompressOnResume(t *testing.T) {
 		Filename: filename,
 		MaxSize:  10,
 	}
+	compressSuffix := l.getCompressor().GetFileExtension()
 	defer l.Close()
 
 	// Create a backup file and empty "compressed" file.

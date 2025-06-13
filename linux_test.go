@@ -103,6 +103,7 @@ func TestCompressMaintainMode(t *testing.T) {
 		MaxBackups: 1,
 		MaxSize:    100, // megabytes
 	}
+	compressSuffix := l.getCompressor().GetFileExtension()
 	defer l.Close()
 	b := []byte("boo!")
 	n, err := l.Write(b)
@@ -153,7 +154,9 @@ func TestCompressMaintainOwner(t *testing.T) {
 		MaxBackups: 1,
 		MaxSize:    100, // megabytes
 	}
+	compressSuffix := l.getCompressor().GetFileExtension()
 	defer l.Close()
+	
 	b := []byte("boo!")
 	n, err := l.Write(b)
 	isNil(err, t)
