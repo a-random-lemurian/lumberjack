@@ -33,6 +33,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -169,6 +171,68 @@ func (c *GzipCompressor) Compress(src, dst string) (err error) {
 		return err
 	}
 	if err := gzf.Close(); err != nil {
+		return err
+	}
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type ZstdCompressor struct{}
+
+func (c *ZstdCompressor) GetFileExtension() string {
+	return ".zst"
+}
+
+func (c *ZstdCompressor) Compress(src, dst string) (err error) {
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %v", err)
+	}
+	defer f.Close()
+
+	fi, err := osStat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat log file: %v", err)
+	}
+
+	if err := chown(dst, fi); err != nil {
+		return fmt.Errorf("failed to chown compressed log file: %v", err)
+	}
+
+	// If this file already exists, we presume it was created by
+	// a previous attempt to compress the log file.
+	compressedFile, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fi.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to open compressed log file: %v", err)
+	}
+	defer compressedFile.Close()
+
+	writer, err := zstd.NewWriter(compressedFile, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(22)))
+	if err != nil {
+		return fmt.Errorf("failed to create new zstd writer: %v", err)
+	}
+
+	defer func() {
+		if err != nil {
+			os.Remove(dst)
+			err = fmt.Errorf("failed to compress log file: %v", err)
+		}
+	}()
+
+	if _, err := io.Copy(writer, f); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	if err := compressedFile.Close(); err != nil {
 		return err
 	}
 
