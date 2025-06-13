@@ -1,4 +1,4 @@
-module gopkg.in/natefinch/lumberjack.v2
+module gopkg.in/a-random-lemurian/lumberjack.v2
 
 go 1.22
 
