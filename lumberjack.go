@@ -184,7 +184,13 @@ func (c *GzipCompressor) Compress(src, dst string) (err error) {
 	return nil
 }
 
-type ZstdCompressor struct{}
+type ZstdCompressor struct{
+	options []zstd.EOption
+}
+
+func NewZstdCompressor(opt ...zstd.EOption) *ZstdCompressor {
+	return &ZstdCompressor{options: opt}
+}
 
 func (c *ZstdCompressor) GetFileExtension() string {
 	return ".zst"
@@ -214,7 +220,7 @@ func (c *ZstdCompressor) Compress(src, dst string) (err error) {
 	}
 	defer compressedFile.Close()
 
-	writer, err := zstd.NewWriter(compressedFile, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(22)))
+	writer, err := zstd.NewWriter(compressedFile, c.options...)
 	if err != nil {
 		return fmt.Errorf("failed to create new zstd writer: %v", err)
 	}
